@@ -1,10 +1,8 @@
 <script setup>
-// ... (script 部分保持不变，因为它与样式无关)
-import { ref, computed } from 'vue';
+import { ref, computed, onBeforeUnmount } from 'vue';
 import {
   showToast,
   showLoadingToast,
-  closeToast,
   showSuccessToast,
   showFailToast,
   showDialog
@@ -14,12 +12,19 @@ import {
 const selShow = ref(false); // 控制楼层选择弹窗显示
 const selValue = ref('2楼北区'); // 当前选中的楼层
 const inputNumber = ref(''); // 输入的座位号
+const redemptionCode = ref(''); // 新增：兑换码输入
 const localData = ref([]); // 存储从 CDN 加载的 JSON 数据
 const isFound = ref(false); // 是否找到座位及生成链接
 const resultUrl = ref(''); // 生成的短链接
 const loading = ref(false); // 防止重复点击
 
 const themeColor = '#01BEFF'; // 定义主题色变量，方便 CSS 引用
+
+// --- 倒计时状态 ---
+const timer = ref(null);         // 定时器实例
+const countdownText = ref('');   // 倒计时显示文本
+const isExpired = ref(false);    // 链接是否过期
+
 
 // 原始 UniApp 的 list 数据，提取为 Vant Picker 的单列数据
 const uniList = [
@@ -47,9 +52,45 @@ const defaultPickerIndex = computed(() => {
 });
 
 
-// --- 2. 方法实现 (对应 methods()) ---
+// --- 2. 逻辑实现 ---
 
-// 替换 uni.request/fetchJsonFromCdn
+// 链接过期处理函数
+const startCountdown = (expiresAt) => {
+  if (timer.value) {
+    clearInterval(timer.value);
+    timer.value = null;
+  }
+  isExpired.value = false;
+
+  const updateCountdown = () => {
+    const now = Date.now();
+    const remainingMs = expiresAt - now;
+
+    if (remainingMs <= 0) {
+      clearInterval(timer.value);
+      isExpired.value = true;
+      countdownText.value = '链接已过期，请重新生成';
+      resultUrl.value = '链接已失效';
+      showFailToast('短链接已过期');
+      return;
+    }
+
+    const minutes = Math.floor(remainingMs / 60000);
+    const seconds = Math.floor((remainingMs % 60000) / 1000);
+    countdownText.value = `链接有效期剩余: ${minutes}分 ${seconds}秒`;
+  };
+
+  updateCountdown();
+  timer.value = setInterval(updateCountdown, 1000);
+};
+
+onBeforeUnmount(() => {
+  if (timer.value) {
+    clearInterval(timer.value);
+  }
+});
+
+
 const fetchJsonFromCdn = async (floor) => {
   const urlMap = {
     '2楼北区': 'https://cdn.jsdelivr.net/gh/himwei/reserveLibary@main/json/2th_north_reserve_one_seat_clear_sorted_rev.json',
@@ -75,7 +116,6 @@ const fetchJsonFromCdn = async (floor) => {
   }
 };
 
-// Vant Picker 确认事件
 const confirmSelection = ({ selectedOptions }) => {
   const selectedFloor = selectedOptions[0].value;
   selValue.value = selectedFloor;
@@ -84,9 +124,8 @@ const confirmSelection = ({ selectedOptions }) => {
   console.log('已选择楼层：', selectedFloor);
 };
 
-// 替换 uni.setClipboardData
 const copyUrl = () => {
-  if (!resultUrl.value) return;
+  if (!resultUrl.value || isExpired.value) return;
 
   if (navigator.clipboard) {
     navigator.clipboard.writeText(resultUrl.value)
@@ -103,12 +142,22 @@ const copyUrl = () => {
 };
 
 
-// 替换 readAndParseJson
+// 核心逻辑修改：强制校验兑换码
 const readAndParseJson = async () => {
   if (loading.value) return;
   loading.value = true;
   isFound.value = false;
   resultUrl.value = '';
+  isExpired.value = false;
+  if (timer.value) clearInterval(timer.value);
+
+  // === 关键修改 1: 兑换码必填校验 ===
+  if (!redemptionCode.value.trim()) {
+    showFailToast('请输入兑换码！');
+    loading.value = false;
+    return;
+  }
+  // ===================================
 
   // 1. 格式化座位号
   let numStr = String(inputNumber.value).trim();
@@ -120,7 +169,7 @@ const readAndParseJson = async () => {
   while (numStr.length < 3) numStr = '0' + numStr;
   const formattedNumber = numStr;
 
-  // 2. 加载 JSON 数据
+  // 2. 加载 JSON 数据 (略)
   const loadToast = showLoadingToast({
     message: '正在加载座位数据...',
     forbidClick: true,
@@ -134,7 +183,7 @@ const readAndParseJson = async () => {
     return;
   }
 
-  // 3. 构建搜索字符串
+  // 3. 构建搜索字符串 (略)
   const prefixMap = {
     '2楼北区': '2F-N',
     '2楼环廊': '2F-C',
@@ -147,7 +196,7 @@ const readAndParseJson = async () => {
   }
   const searchStr = prefix + formattedNumber;
 
-  // 4. 查找座位
+  // 4. 查找座位 (略)
   let foundItem = null;
   localData.value.forEach(item => {
     if (item.devName === searchStr) {
@@ -161,7 +210,7 @@ const readAndParseJson = async () => {
     return;
   }
 
-  // 5. 生成长链接
+  // 5. 生成长链接 (略)
   const longUrl = `https://oneseat.zjhzu.edu.cn/scancode.html#/login?sta=1&sysid=1BC&lab=${foundItem.labId}&dev=${foundItem.devSn}`;
 
   // 6. 调用 Worker API 生成短链接
@@ -172,13 +221,16 @@ const readAndParseJson = async () => {
   });
 
   try {
-    const workerUrl = '/api-shortlink/api'; // <--- 使用代理路径
+    const workerUrl = '/api-shortlink/api';
     const response = await fetch(workerUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ originalUrl: longUrl}),
+      body: JSON.stringify({
+        originalUrl: longUrl,
+        redemptionCode: redemptionCode.value.toUpperCase() // 强制发送兑换码
+      }),
     });
 
     const resData = await response.json();
@@ -186,10 +238,15 @@ const readAndParseJson = async () => {
     if (response.ok && resData.shortLink) {
       resultUrl.value = resData.shortLink;
       isFound.value = true;
-      showSuccessToast({message: `找到${searchStr}`, duration: 1000});
+      showSuccessToast({ message: `找到${searchStr}`, duration: 1000 });
+      startCountdown(resData.expiresAt);
+
+    } else if (resData.error) {
+      // 后端返回的兑换码错误信息或其他业务错误
+      showFailToast({ message: resData.error, duration: 2000 });
+
     } else {
       console.error('短链接 API 错误:', resData);
-      // 如果短链接失败，可以显示原始长链接作为备用
       resultUrl.value = longUrl;
       isFound.value = true;
       showDialog({
@@ -200,7 +257,7 @@ const readAndParseJson = async () => {
 
   } catch (err) {
     console.error('请求短链接失败:', err);
-    resultUrl.value = longUrl; // 短链接失败时，仍然显示长链接
+    resultUrl.value = longUrl;
     isFound.value = true;
     showDialog({
       title: '短链接请求失败',
@@ -218,7 +275,6 @@ const readAndParseJson = async () => {
     <div class="container">
       <!-- 楼层选择弹窗 - 替换 tn-select -->
       <van-popup v-model:show="selShow" position="bottom" round>
-        <!-- Vant Picker 用于选择楼层，单列模式 -->
         <van-picker
             :columns="floorOptions"
             :default-index="defaultPickerIndex"
@@ -226,7 +282,6 @@ const readAndParseJson = async () => {
             @confirm="confirmSelection"
             @cancel="selShow = false"
         >
-          <!-- 确保 Vant Picker 的确认按钮使用主题色 -->
           <template #confirm-button>
             <van-button :color="themeColor" block>确认</van-button>
           </template>
@@ -250,7 +305,6 @@ const readAndParseJson = async () => {
       </div>
 
       <!-- 座位号输入框 - 替换 tn-input -->
-      <!-- Vant Field 默认样式已经不错，这里主要通过 style 调整间距和 label -->
       <van-field
           v-model="inputNumber"
           placeholder="请输入数字座位号 例如123或1(会整理为001)"
@@ -262,13 +316,28 @@ const readAndParseJson = async () => {
           class="input-box"
       />
 
+      <!-- 新增：兑换码输入框 - 标记为必填 -->
+      <van-field
+          v-model="redemptionCode"
+          placeholder="请输入必填兑换码 (例如 VIP888)"
+          clearable
+          :border="true"
+          type="text"
+          label="兑换码"
+          class="input-box"
+          style="margin-top: 0px;"
+          required
+      :rules="[{ required: true, message: '兑换码不能为空' }]"
+      />
+
       <!-- 生成链接按钮 - 替换 tn-button -->
+      <!-- 禁用逻辑新增检查兑换码是否为空 -->
       <van-button
           type="primary"
           size="large"
           @click="readAndParseJson"
           :loading="loading"
-          :disabled="loading || !inputNumber"
+          :disabled="loading || !inputNumber || !redemptionCode.trim()"
           :color="themeColor"
           class="modern-button"
           style="margin-bottom: 20px;"
@@ -277,7 +346,13 @@ const readAndParseJson = async () => {
       </van-button>
 
       <!-- 结果显示区域 -->
-      <div v-if="isFound" class="result-area modern-card">
+      <div v-if="isFound" class="result-area modern-card" :class="{'expired-card': isExpired}">
+
+        <!-- 新增：倒计时显示 -->
+        <p class="countdown-text" :class="{'expired-text': isExpired}">
+          {{ countdownText }}
+        </p>
+
         <!-- 链接显示 -->
         <p class="result-url">{{ resultUrl }}</p>
 
@@ -288,6 +363,7 @@ const readAndParseJson = async () => {
             @click="copyUrl"
             :color="themeColor"
             class="modern-button"
+            :disabled="isExpired"
         >
           点击复制链接
         </van-button>
@@ -297,6 +373,8 @@ const readAndParseJson = async () => {
 </template>
 
 <style scoped>
+/* (样式部分保持不变，确保继承您之前的精致化效果) */
+
 /* 使用 v-bind 绑定 themeColor */
 .result-url {
   color: v-bind(themeColor) !important;
@@ -319,8 +397,6 @@ const readAndParseJson = async () => {
   background-color: #ffffff; /* 内容区使用白色背景 */
   border-radius: 12px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05); /* 柔和的阴影 */
-  height: 100vh;
-
 }
 
 /* 现代按钮样式：圆角和细微过渡 */
@@ -352,11 +428,15 @@ const readAndParseJson = async () => {
 
 /* 输入框优化 */
 .input-box {
-  margin: 20px 0 !important;
+  margin: 10px 0 !important;
   border-radius: 8px;
-  overflow: hidden; /* 配合圆角 */
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05); /* 轻微阴影 */
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
+.input-box:first-of-type {
+  margin-top: 20px !important;
+}
+
 
 /* 覆盖 Vant Field 的边框样式 */
 :deep(.input-box .van-field__control) {
@@ -367,11 +447,12 @@ const readAndParseJson = async () => {
 .result-area {
   margin-top: 30px;
   padding: 20px 15px;
-  border: 1px solid #ebedf0; /* 柔和的边框 */
-  border-radius: 10px; /* 圆角 */
-  background-color: #ffffff; /* 确保背景是白色 */
-  box-shadow: 0 6px 20px rgba(1, 190, 255, 0.1); /* 使用主题色系的柔和阴影 */
+  border: 1px solid #ebedf0;
+  border-radius: 10px;
+  background-color: #ffffff;
+  box-shadow: 0 6px 20px rgba(1, 190, 255, 0.1);
   text-align: center;
+  transition: all 0.3s ease;
 }
 
 .result-url {
@@ -380,6 +461,24 @@ const readAndParseJson = async () => {
   font-weight: 600;
   margin-bottom: 20px;
   padding: 5px;
-  border-bottom: 1px dotted #ccc; /* 链接底部虚线 */
+  border-bottom: 1px dotted #ccc;
+}
+
+/* 倒计时文本样式 */
+.countdown-text {
+  font-size: 14px;
+  color: #ff976a;
+  margin-bottom: 10px;
+  font-weight: 500;
+}
+
+.expired-text {
+  color: #ee0a24;
+  font-weight: bold;
+}
+
+.expired-card {
+  border: 1px dashed #ee0a24;
+  box-shadow: 0 6px 20px rgba(238, 10, 36, 0.1);
 }
 </style>
