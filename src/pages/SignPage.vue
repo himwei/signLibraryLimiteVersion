@@ -396,7 +396,7 @@ const readAndParseJson = async () => {
       <!-- 新增：兑换码输入框 - 标记为必填 -->
       <van-field
           v-model="redemptionCode"
-          placeholder="请输入必填兑换码 (例如 VIP888 或 himwei12138)"
+          placeholder="请输入必填兑换码"
           clearable
           :border="true"
           type="text"
