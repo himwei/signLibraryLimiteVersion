@@ -185,16 +185,74 @@ const readAndParseJson = async () => {
   isExpired.value = false;
   if (timer.value) clearInterval(timer.value);
 
-  // === 兑换码必填校验 (略) ===
+  // === 兑换码必填校验 ===
   if (!redemptionCode.value.trim()) {
     showFailToast({message: '请输入兑换码！', forbidClick: true, duration: 2000});
     loading.value = false;
     return;
   }
-  // ... (其他校验和 Loading Toast 保持不变) ...
+  // ===================================
 
+  // 1. 格式化座位号
+  let numStr = String(inputNumber.value).trim();
+  if (!numStr) {
+    showFailToast({message: '请输入座位号', forbidClick: true, duration: 2000});
+    loading.value = false;
+    return;
+  }
+  while (numStr.length < 3) numStr = '0' + numStr;
+  const formattedNumber = numStr;
+
+  // 2. 加载 JSON 数据
+  const loadToast = showLoadingToast({
+    message: '正在加载座位数据...',
+    forbidClick: true,
+    duration: 0,
+  });
+
+  localData.value = await fetchJsonFromCdn(selValue.value);
+  loadToast.close();
+  if (!localData.value.length) {
+    loading.value = false;
+    return;
+  }
+
+  // 3. 构建搜索字符串 (前缀映射)
+  const prefixMap = {
+    '2楼北区': '2F-N',
+    '2楼环廊': '2F-C',
+    '3楼东门': '3F-E',
+    '3楼南门': '3F-S',
+  };
+  const prefix = prefixMap[selValue.value] || '';
+  if (!prefix) {
+    showFailToast({message: '未知楼层前缀或未映射', forbidClick: true, duration: 2000});
+    loading.value = false;
+    return;
+  }
+  const searchStr = prefix + formattedNumber; // 👈 searchStr 定义在这里
+
+  // 4. 查找座位
+  let foundItem = null;
+  localData.value.forEach(item => {
+    if (item.devName === searchStr) {
+      foundItem = item;
+    }
+  });
+
+  if (!foundItem) {
+    showFailToast({message: `未找到 ${searchStr}`, duration: 800, forbidClick: true});
+    loading.value = false;
+    return;
+  }
+
+  // 5. 生成长链接
+  const longUrl = `https://oneseat.zjhzu.edu.cn/scancode.html#/login?sta=1&sysid=1BC&lab=${foundItem.labId}&dev=${foundItem.devSn}`;
+
+  // 6. 调用 Worker API 生成短链接
+  // 确保 searchStr 在这里可用
   const shortLinkToast = showLoadingToast({
-    message: `正在找 ${searchStr}...`,
+    message: `正在找 ${searchStr}...`, // searchStr 现在已定义
     forbidClick: true,
     duration: 0,
   });
@@ -212,17 +270,14 @@ const readAndParseJson = async () => {
       }),
     });
 
-    // 无论状态码如何，我们都先尝试解析 JSON。
-    // 如果响应体为空或非 JSON，这里会抛出 SyntaxError，进入 catch 块。
+    // 无论状态码如何，都先尝试解析 JSON
     const resData = await response.json();
 
-    // --- 【最终的核心错误处理逻辑】---
+    // --- 【核心错误处理逻辑】---
 
-    // 1. 业务错误响应 (HTTP 400, 403, 404, 500 等，只要 Worker 返回了 { error: ... } )
+    // 1. 业务错误响应 (HTTP 4xx/5xx 且带有 { error: ... } )
     if (!response.ok && resData && resData.error) {
       shortLinkToast.close();
-
-      // 显示后端返回的错误信息
       const failToast = showFailToast({message: resData.error, duration: 3000, forbidClick: true});
       failToast.then(() => { loading.value = false; });
       return;
@@ -239,7 +294,7 @@ const readAndParseJson = async () => {
       return;
     }
 
-    // 3. 兜底错误 (例如 HTTP 200 但没有 shortLink，或 4xx/5xx 但没有 { error: ... })
+    // 3. 兜底错误 (非预期响应)
     shortLinkToast.close();
     console.error('短链接 API 错误:', resData);
     resultUrl.value = longUrl;
@@ -255,7 +310,6 @@ const readAndParseJson = async () => {
     console.error('请求短链接失败:', err);
 
     let errorMessage = '请求短链接失败，请检查网络';
-    // 区分 JSON 解析错误（后端返回了非JSON）和真正的网络错误
     if (err instanceof SyntaxError && err.message.includes('JSON')) {
       errorMessage = '服务器响应格式错误，请联系管理员';
     }
