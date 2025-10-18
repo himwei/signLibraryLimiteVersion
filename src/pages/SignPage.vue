@@ -271,55 +271,52 @@ const readAndParseJson = async () => {
 
     const resData = await response.json();
 
-    if (response.ok && resData.shortLink) {
-      shortLinkToast.close();
-      resultUrl.value = resData.shortLink;
-      isFound.value = true;
-      // 【关键修正：成功 Toast 也要 forbidClick】
-      const successToast = showSuccessToast({message: `找到${searchStr}`, duration: 1000, forbidClick: true});
-
-      // 成功 Toast 结束后再解除按钮 loading
-      successToast.then(() => {
-        loading.value = false;
-      });
-
-      startCountdown(resData.expiresAt);
-
-    } else if (resData.error) {
-
-      shortLinkToast.close();
-      // 【关键修正：失败 Toast 也要 forbidClick】
-      const failToast = showFailToast({message: resData.error, duration: 2000, forbidClick: true});
-
-      // 失败 Toast 结束后再解除按钮 loading
-      failToast.then(() => {
-        loading.value = false;
-      });
-
-    } else {
-
-      shortLinkToast.close();
-      console.error('短链接 API 错误:', resData);
-      resultUrl.value = longUrl;
-      isFound.value = true;
-      showDialog({
-        title: '短链接生成失败',
-        message: '已使用原始链接作为结果。',
-      }).then(() => {
-        loading.value = false; // Dialog 关闭后解除 loading
-      });
+    if (response.ok) {
+      if (resData.shortLink) {
+        shortLinkToast.close();
+        resultUrl.value = resData.shortLink;
+        isFound.value = true;
+        const successToast = showSuccessToast({message: `找到${searchStr}`, duration: 1000, forbidClick: true});
+        successToast.then(() => { loading.value = false; });
+        startCountdown(resData.expiresAt);
+        return; // 成功并返回
+      }
     }
 
+    // 2. 检查是否为失败的业务响应 (HTTP 400-599 且带有 JSON 错误信息)
+    // 无论是 400, 403, 还是 500，只要 Worker 成功返回了 JSON 且包含 error 字段，就应该显示它。
+    if (resData.error) {
+      shortLinkToast.close();
+      // 【关键修正：增加 duration 到 3000ms，让用户看清楚】
+      const failToast = showFailToast({message: resData.error, duration: 3000, forbidClick: true});
+      failToast.then(() => { loading.value = false; });
+      return; // 业务错误并返回
+    }
+
+    // 3. 其他非预期的服务器响应 (例如 404 或 500，但没有 error 字段)
+    shortLinkToast.close();
+    console.error('短链接 API 错误:', resData);
+    resultUrl.value = longUrl;
+    isFound.value = true;
+    showDialog({
+      title: '短链接生成失败',
+      message: `服务器响应代码 ${response.status} 但无错误信息。`,
+    }).then(() => { loading.value = false; });
+
   } catch (err) {
+    // --- 【修正后的网络/JSON 解析错误处理逻辑】---
+
     shortLinkToast.close();
     console.error('请求短链接失败:', err);
-    // 【关键修正：失败 Toast 也要 forbidClick】
-    const failToast = showFailToast({message: '请求短链接失败，请检查网络', duration: 2000, forbidClick: true});
 
-    // 失败 Toast 结束后再解除按钮 loading
-    failToast.then(() => {
-      loading.value = false;
-    });
+    // 区分 JSON 解析错误和真正的网络错误
+    let errorMessage = '请求短链接失败，请检查网络';
+    if (err instanceof SyntaxError && err.message.includes('JSON')) {
+      errorMessage = '请求成功但响应格式错误（非JSON）';
+    }
+
+    const failToast = showFailToast({message: errorMessage, duration: 3000, forbidClick: true});
+    failToast.then(() => { loading.value = false; });
 
     resultUrl.value = longUrl;
     isFound.value = true;
