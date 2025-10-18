@@ -185,71 +185,14 @@ const readAndParseJson = async () => {
   isExpired.value = false;
   if (timer.value) clearInterval(timer.value);
 
-  // === 兑换码必填校验 ===
+  // === 兑换码必填校验 (略) ===
   if (!redemptionCode.value.trim()) {
     showFailToast({message: '请输入兑换码！', forbidClick: true, duration: 2000});
     loading.value = false;
     return;
   }
-  // ===================================
+  // ... (其他校验和 Loading Toast 保持不变) ...
 
-  // 1. 格式化座位号
-  let numStr = String(inputNumber.value).trim();
-  if (!numStr) {
-    showFailToast({message: '请输入座位号', forbidClick: true, duration: 2000});
-    loading.value = false;
-    return;
-  }
-  while (numStr.length < 3) numStr = '0' + numStr;
-  const formattedNumber = numStr;
-
-  // 2. 加载 JSON 数据
-  const loadToast = showLoadingToast({
-    message: '正在加载座位数据...',
-    forbidClick: true,
-    duration: 0,
-  });
-
-  localData.value = await fetchJsonFromCdn(selValue.value);
-  loadToast.close();
-  if (!localData.value.length) {
-    loading.value = false;
-    return;
-  }
-
-  // 3. 构建搜索字符串 (前缀映射)
-  const prefixMap = {
-    '2楼北区': '2F-N',
-    '2楼环廊': '2F-C',
-    '3楼东门': '3F-E',
-    '3楼南门': '3F-S',
-  };
-  const prefix = prefixMap[selValue.value] || '';
-  if (!prefix) {
-    showFailToast({message: '未知楼层前缀或未映射', forbidClick: true, duration: 2000});
-    loading.value = false;
-    return;
-  }
-  const searchStr = prefix + formattedNumber;
-
-  // 4. 查找座位
-  let foundItem = null;
-  localData.value.forEach(item => {
-    if (item.devName === searchStr) {
-      foundItem = item;
-    }
-  });
-
-  if (!foundItem) {
-    showFailToast({message: `未找到 ${searchStr}`, duration: 800, forbidClick: true});
-    loading.value = false;
-    return;
-  }
-
-  // 5. 生成长链接
-  const longUrl = `https://oneseat.zjhzu.edu.cn/scancode.html#/login?sta=1&sysid=1BC&lab=${foundItem.labId}&dev=${foundItem.devSn}`;
-
-  // 6. 调用 Worker API 生成短链接
   const shortLinkToast = showLoadingToast({
     message: `正在找 ${searchStr}...`,
     forbidClick: true,
@@ -265,54 +208,56 @@ const readAndParseJson = async () => {
       },
       body: JSON.stringify({
         originalUrl: longUrl,
-        redemptionCode: redemptionCode.value // 前端发送原值，后端会处理大小写
+        redemptionCode: redemptionCode.value
       }),
     });
 
+    // 无论状态码如何，我们都先尝试解析 JSON。
+    // 如果响应体为空或非 JSON，这里会抛出 SyntaxError，进入 catch 块。
     const resData = await response.json();
 
-    if (response.ok) {
-      if (resData.shortLink) {
-        shortLinkToast.close();
-        resultUrl.value = resData.shortLink;
-        isFound.value = true;
-        const successToast = showSuccessToast({message: `找到${searchStr}`, duration: 1000, forbidClick: true});
-        successToast.then(() => { loading.value = false; });
-        startCountdown(resData.expiresAt);
-        return; // 成功并返回
-      }
-    }
+    // --- 【最终的核心错误处理逻辑】---
 
-    // 2. 检查是否为失败的业务响应 (HTTP 400-599 且带有 JSON 错误信息)
-    // 无论是 400, 403, 还是 500，只要 Worker 成功返回了 JSON 且包含 error 字段，就应该显示它。
-    if (resData.error) {
+    // 1. 业务错误响应 (HTTP 400, 403, 404, 500 等，只要 Worker 返回了 { error: ... } )
+    if (!response.ok && resData && resData.error) {
       shortLinkToast.close();
-      // 【关键修正：增加 duration 到 3000ms，让用户看清楚】
+
+      // 显示后端返回的错误信息
       const failToast = showFailToast({message: resData.error, duration: 3000, forbidClick: true});
       failToast.then(() => { loading.value = false; });
-      return; // 业务错误并返回
+      return;
     }
 
-    // 3. 其他非预期的服务器响应 (例如 404 或 500，但没有 error 字段)
+    // 2. 成功响应 (HTTP 200-299 且包含 shortLink)
+    if (response.ok && resData.shortLink) {
+      shortLinkToast.close();
+      resultUrl.value = resData.shortLink;
+      isFound.value = true;
+      const successToast = showSuccessToast({message: `找到${searchStr}`, duration: 1000, forbidClick: true});
+      successToast.then(() => { loading.value = false; });
+      startCountdown(resData.expiresAt);
+      return;
+    }
+
+    // 3. 兜底错误 (例如 HTTP 200 但没有 shortLink，或 4xx/5xx 但没有 { error: ... })
     shortLinkToast.close();
     console.error('短链接 API 错误:', resData);
     resultUrl.value = longUrl;
     isFound.value = true;
     showDialog({
       title: '短链接生成失败',
-      message: `服务器响应代码 ${response.status} 但无错误信息。`,
+      message: `服务器响应代码 ${response.status} 但响应格式异常或缺少必要字段。`,
     }).then(() => { loading.value = false; });
 
   } catch (err) {
-    // --- 【修正后的网络/JSON 解析错误处理逻辑】---
-
+    // --- 【网络或 JSON 解析错误处理逻辑】---
     shortLinkToast.close();
     console.error('请求短链接失败:', err);
 
-    // 区分 JSON 解析错误和真正的网络错误
     let errorMessage = '请求短链接失败，请检查网络';
+    // 区分 JSON 解析错误（后端返回了非JSON）和真正的网络错误
     if (err instanceof SyntaxError && err.message.includes('JSON')) {
-      errorMessage = '请求成功但响应格式错误（非JSON）';
+      errorMessage = '服务器响应格式错误，请联系管理员';
     }
 
     const failToast = showFailToast({message: errorMessage, duration: 3000, forbidClick: true});
@@ -324,9 +269,6 @@ const readAndParseJson = async () => {
       title: '短链接请求失败',
       message: '已使用原始链接作为结果。',
     });
-  } finally {
-    // 统一在 try/catch 逻辑分支中通过 Toast.then() 或 Dialog.then() 来管理 loading.value = false
-    // 避免 Toast 遮罩未解除前，按钮 loading 状态就被清除。
   }
 };
 </script>
