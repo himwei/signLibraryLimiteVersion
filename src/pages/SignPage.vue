@@ -46,14 +46,7 @@ const floorOptions = [
     text: '3楼',
     value: '3楼',
     children: [
-      {
-        text: '东门',
-        value: '3楼东门',
-      },
-      {
-        text: '南门',
-        value: '3楼南门',
-      },
+
     ],
   },
 ];
