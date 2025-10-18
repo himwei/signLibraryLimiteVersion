@@ -1,1 +1,5 @@
+# 通用代理规则：将所有 /api-shortlink/anything 代理到 Worker 的 /anything
+/api-shortlink/:path https://hzcshortlinklimite.himweiyeah.xyz/:path 200
+
+# 确保 Pages 知道 /api-shortlink/api 的完整代理
 /api-shortlink/api https://hzcshortlinklimite.himweiyeah.xyz/api 200
