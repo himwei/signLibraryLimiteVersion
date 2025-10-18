@@ -185,16 +185,14 @@ const readAndParseJson = async () => {
   isExpired.value = false;
   if (timer.value) clearInterval(timer.value);
 
-  // === 兑换码必填校验 ===
-  const FAIL_DURATION = 3000; // 统一设置失败提示持续时间
-
+  // === 兑换码必填校验 (略) ===
+  const FAIL_DURATION = 3000;
   if (!redemptionCode.value.trim()) {
     showFailToast({message: '请输入兑换码！', forbidClick: true, duration: 2000});
     loading.value = false;
     return;
   }
-  // ... (其他校验和 Loading Toast 保持不变) ...
-
+  // ... (座位号校验等略) ...
   let numStr = String(inputNumber.value).trim();
   if (!numStr) {
     showFailToast({message: '请输入座位号', forbidClick: true, duration: 2000});
@@ -204,11 +202,7 @@ const readAndParseJson = async () => {
   while (numStr.length < 3) numStr = '0' + numStr;
   const formattedNumber = numStr;
 
-  const loadToast = showLoadingToast({
-    message: '正在加载座位数据...',
-    forbidClick: true,
-    duration: 0,
-  });
+  // ... (加载 JSON 数据逻辑略) ...
 
   localData.value = await fetchJsonFromCdn(selValue.value);
   loadToast.close();
@@ -217,12 +211,9 @@ const readAndParseJson = async () => {
     return;
   }
 
-  const prefixMap = {
-    '2楼北区': '2F-N',
-    '2楼环廊': '2F-C',
-    '3楼东门': '3F-E',
-    '3楼南门': '3F-S',
-  };
+  // ... (构建 searchStr 和查找 foundItem 逻辑略) ...
+
+  const prefixMap = { '2楼北区': '2F-N', '2楼环廊': '2F-C', '3楼东门': '3F-E', '3楼南门': '3F-S', };
   const prefix = prefixMap[selValue.value] || '';
   if (!prefix) {
     showFailToast({message: '未知楼层前缀或未映射', forbidClick: true, duration: 2000});
@@ -244,8 +235,9 @@ const readAndParseJson = async () => {
     return;
   }
 
-  const longUrl = `https://oneseat.zjhzu.edu.cn/scancode.html#/login?sta=1&sysid=1BC&lab=${foundItem.labId}&dev=${foundItem.devSn}`;
+  // 5. 【关键修改：移除长链接 longUrl 的生成】
 
+  // 6. 调用 Worker API 生成短链接
   const shortLinkToast = showLoadingToast({
     message: `正在找 ${searchStr}...`,
     forbidClick: true,
@@ -260,7 +252,9 @@ const readAndParseJson = async () => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        originalUrl: longUrl,
+        // 【关键修改：发送原始参数而不是完整的 longUrl】
+        labId: foundItem.labId,
+        devSn: foundItem.devSn,
         redemptionCode: redemptionCode.value
       }),
     });
@@ -268,54 +262,31 @@ const readAndParseJson = async () => {
     const resData = await response.json();
 
     // --- 【核心错误处理逻辑】---
-
-    // 1. 业务错误响应 (HTTP 4xx/5xx 且带有 { error: ... } )
     if (!response.ok && resData && resData.error) {
       shortLinkToast.close();
-
-      // ❌ 移除 .then()，使用 on-close 钩子或 setTimeout
-      showFailToast({
-        message: resData.error,
-        duration: FAIL_DURATION,
-        forbidClick: true,
-        // 方式一：使用 on-close 钩子（如果 Vant 4 Toast 支持）
-        // onClosed: () => { loading.value = false; }
-      });
-
-      // 方式二：使用 setTimeout 模拟持续时间后解除 loading
-      setTimeout(() => { loading.value = false; }, FAIL_DURATION);
+      const failToast = showFailToast({message: resData.error, duration: 3000, forbidClick: true});
+      failToast.then(() => { loading.value = false; });
       return;
     }
 
-    // 2. 成功响应 (HTTP 200-299 且包含 shortLink)
     if (response.ok && resData.shortLink) {
       shortLinkToast.close();
       resultUrl.value = resData.shortLink;
       isFound.value = true;
-
-      const SUCCESS_DURATION = 1000;
-      showSuccessToast({
-        message: `找到${searchStr}`,
-        duration: SUCCESS_DURATION,
-        forbidClick: true
-      });
-
-      // 使用 setTimeout 模拟持续时间后解除 loading
-      setTimeout(() => { loading.value = false; }, SUCCESS_DURATION);
-
+      const successToast = showSuccessToast({message: `找到${searchStr}`, duration: 1000, forbidClick: true});
+      successToast.then(() => { loading.value = false; });
       startCountdown(resData.expiresAt);
       return;
     }
 
-    // 3. 兜底错误 (非预期响应)
+    // 兜底错误
     shortLinkToast.close();
     console.error('短链接 API 错误:', resData);
-    resultUrl.value = longUrl;
-    isFound.value = true;
+    isFound.value = false; // 失败时不显示结果区域
     showDialog({
       title: '短链接生成失败',
       message: `服务器响应代码 ${response.status} 但响应格式异常或缺少必要字段。`,
-    }).then(() => { loading.value = false; }); // Dialog 仍然返回 Promise，可以使用 .then
+    }).then(() => { loading.value = false; });
 
   } catch (err) {
     // --- 【网络或 JSON 解析错误处理逻辑】---
@@ -327,20 +298,13 @@ const readAndParseJson = async () => {
       errorMessage = '服务器响应格式错误，请联系管理员';
     }
 
-    // ❌ 移除 .then()，使用 setTimeout
-    showFailToast({
-      message: errorMessage,
-      duration: FAIL_DURATION,
-      forbidClick: true
-    });
+    const failToast = showFailToast({message: errorMessage, duration: 3000, forbidClick: true});
+    failToast.then(() => { loading.value = false; });
 
-    setTimeout(() => { loading.value = false; }, FAIL_DURATION);
-
-    resultUrl.value = longUrl;
-    isFound.value = true;
+    isFound.value = false; // 失败时不显示结果区域
     showDialog({
       title: '短链接请求失败',
-      message: '已使用原始链接作为结果。',
+      message: '请检查网络或稍后重试。',
     });
   }
 };
