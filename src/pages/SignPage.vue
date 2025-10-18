@@ -13,7 +13,7 @@ const selShow = ref(false); // 控制楼层选择弹窗显示
 const selValue = ref('2楼北区'); // 当前选中的楼层 (初始值)
 const inputNumber = ref(''); // 输入的座位号
 const redemptionCode = ref(''); // 兑换码输入
-const localData = ref([]); // 存储从 CDN 加载的 JSON 数据
+const localData = ref([]); // 存储从 CDN 加载的 JSON 数据 (保留但已无用)
 const isFound = ref(false); // 是否找到座位及生成链接
 const resultUrl = ref(''); // 生成的短链接
 const loading = ref(false); // 防止重复点击
@@ -34,7 +34,7 @@ const floorOptions = [
     children: [
       {
         text: '北区',
-        value: '2楼北区', // 实际分区值 (CDN/前缀依赖这个)
+        value: '2楼北区', // 实际分区值 (Worker 依赖这个)
       },
       {
         text: '环廊',
@@ -46,14 +46,14 @@ const floorOptions = [
     text: '3楼',
     value: '3楼',
     children: [
-      // {
-      //   text: '东门',
-      //   value: '3楼东门',
-      // },
-      // {
-      //   text: '南门',
-      //   value: '3楼南门',
-      // },
+      {
+        text: '东门',
+        value: '3楼东门',
+      },
+      {
+        text: '南门',
+        value: '3楼南门',
+      },
     ],
   },
 ];
@@ -113,33 +113,9 @@ onBeforeUnmount(() => {
 });
 
 
-// 【CDN 映射】
-const fetchJsonFromCdn = async (floor) => {
-  const urlMap = {
-    '2楼北区': 'https://cdn.jsdelivr.net/gh/himwei/reserveLibary@main/json/2th_north_reserve_one_seat_clear_sorted_rev.json',
-    '2楼环廊': 'https://cdn.jsdelivr.net/gh/himwei/reserveLibary@main/json/2th_round_reserve_one_seat_clear_sorted_rev.json',
-    '3楼东门': 'https://cdn.jsdelivr.net/gh/himwei/reserveLibary@main/json/3th_east_reserve_one_seat_clear_sorted_rev.json',
-    '3楼南门': 'https://cdn.jsdelivr.net/gh/himwei/reserveLibary@main/json/3th_south_reserve_one_seat_clear_sorted_rev.json',
-  };
-  const url = urlMap[floor];
+// 【移除 fetchJsonFromCdn，Worker 将处理数据获取】
+// const fetchJsonFromCdn = async (floor) => { ... } 👈 已移除
 
-  if (!url) {
-    showFailToast('未知楼层/分区');
-    return [];
-  }
-
-  try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-    return await response.json();
-  } catch (error) {
-    console.error('读取 JSON 失败:', error);
-    showFailToast('读取失败或网络请求失败');
-    return [];
-  }
-};
 
 // 【适配 Vant 级联选择器的返回值】
 const confirmSelection = ({selectedOptions}) => {
@@ -157,7 +133,7 @@ const confirmSelection = ({selectedOptions}) => {
   console.log('已选择楼层：', selValue.value);
 };
 
-// 【关键修正：实现复制功能】
+// 【实现复制功能】
 const copyUrl = () => {
   if (!resultUrl.value || isExpired.value) return;
 
@@ -176,7 +152,7 @@ const copyUrl = () => {
 };
 
 
-// 核心逻辑修改：强制校验兑换码
+// 核心逻辑修改：强制校验兑换码并调用 Worker
 const readAndParseJson = async () => {
   if (loading.value) return;
   loading.value = true;
@@ -185,16 +161,14 @@ const readAndParseJson = async () => {
   isExpired.value = false;
   if (timer.value) clearInterval(timer.value);
 
-  // === 兑换码必填校验 ===
+  // === 校验 ===
   const FAIL_DURATION = 3000;
   if (!redemptionCode.value.trim()) {
     showFailToast({message: '请输入兑换码！', forbidClick: true, duration: 2000});
     loading.value = false;
     return;
   }
-  // ===================================
 
-  // 1. 格式化座位号
   let numStr = String(inputNumber.value).trim();
   if (!numStr) {
     showFailToast({message: '请输入座位号', forbidClick: true, duration: 2000});
@@ -204,56 +178,13 @@ const readAndParseJson = async () => {
   while (numStr.length < 3) numStr = '0' + numStr;
   const formattedNumber = numStr;
 
-  // 2. 加载 JSON 数据
-  // 【关键修正：确保 loadToast 定义完整】
-  const loadToast = showLoadingToast({
-    message: '正在加载座位数据...',
-    forbidClick: true,
-    duration: 0,
-  });
+  // 【关键修改：前端不再查找座位】
+  const floorAndSection = selValue.value;
+  const seatNumber = formattedNumber;
 
-  localData.value = await fetchJsonFromCdn(selValue.value);
-  loadToast.close();
-  if (!localData.value.length) {
-    loading.value = false;
-    return;
-  }
-
-  // 3. 构建搜索字符串 (前缀映射)
-  const prefixMap = {
-    '2楼北区': '2F-N',
-    '2楼环廊': '2F-C',
-    '3楼东门': '3F-E',
-    '3楼南门': '3F-S',
-  };
-  const prefix = prefixMap[selValue.value] || '';
-  if (!prefix) {
-    showFailToast({message: '未知楼层前缀或未映射', forbidClick: true, duration: 2000});
-    loading.value = false;
-    return;
-  }
-  const searchStr = prefix + formattedNumber; // 确保 searchStr 定义在 Loading Toast 之前
-
-  // 4. 查找座位
-  let foundItem = null;
-  localData.value.forEach(item => {
-    if (item.devName === searchStr) {
-      foundItem = item;
-    }
-  });
-
-  if (!foundItem) {
-    showFailToast({message: `未找到 ${searchStr}`, duration: 800, forbidClick: true});
-    loading.value = false;
-    return;
-  }
-
-  // 5. 生成长链接（Worker 内部完成，前端只需要参数）
-  const longUrl = `https://oneseat.zjhzu.edu.cn/scancode.html#/login?sta=1&sysid=1BC&lab=${foundItem.labId}&dev=${foundItem.devSn}`; // 仅作为 Dialog 备用，不用于 API 调用
-
-  // 6. 调用 Worker API 生成短链接
+  // 1. Loading Toast
   const shortLinkToast = showLoadingToast({
-    message: `正在找 ${searchStr}...`,
+    message: `正在查找 ${floorAndSection}${seatNumber}...`,
     forbidClick: true,
     duration: 0,
   });
@@ -266,22 +197,20 @@ const readAndParseJson = async () => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        // 【关键修改：使用新的参数名 p_a, p_b】
-        p_a: foundItem.labId,  // 例如，p_a 对应 labId
-        p_b: foundItem.devSn,  // 例如，p_b 对应 devSn
+        // 【发送 Worker 需要的参数】
+        floor: floorAndSection,   // e.g., '2楼北区'
+        seatNumber: seatNumber, // e.g., '001'
         redemptionCode: redemptionCode.value
       }),
     });
 
     const resData = await response.json();
 
-    // --- 【核心错误处理逻辑】---
-
     // 1. 业务错误响应 (HTTP 4xx/5xx 且带有 { error: ... } )
     if (!response.ok && resData && resData.error) {
       shortLinkToast.close();
-      const failToast = showFailToast({message: resData.error, duration: 3000, forbidClick: true});
-      setTimeout(() => { loading.value = false; }, FAIL_DURATION); // 修正 Vant 4 Promise
+      const failToast = showFailToast({message: resData.error, duration: FAIL_DURATION, forbidClick: true});
+      setTimeout(() => { loading.value = false; }, FAIL_DURATION);
       return;
     }
 
@@ -291,8 +220,8 @@ const readAndParseJson = async () => {
       resultUrl.value = resData.shortLink;
       isFound.value = true;
       const SUCCESS_DURATION = 1000;
-      showSuccessToast({message: `找到${searchStr}`, duration: SUCCESS_DURATION, forbidClick: true});
-      setTimeout(() => { loading.value = false; }, SUCCESS_DURATION); // 修正 Vant 4 Promise
+      showSuccessToast({message: `查找成功`, duration: SUCCESS_DURATION, forbidClick: true});
+      setTimeout(() => { loading.value = false; }, SUCCESS_DURATION);
       startCountdown(resData.expiresAt);
       return;
     }
@@ -304,7 +233,7 @@ const readAndParseJson = async () => {
     showDialog({
       title: '短链接生成失败',
       message: `服务器响应代码 ${response.status} 但响应格式异常或缺少必要字段。`,
-    }).then(() => { loading.value = false; }); // Dialog 仍然是 Promise
+    }).then(() => { loading.value = false; });
 
   } catch (err) {
     // --- 【网络或 JSON 解析错误处理逻辑】---
@@ -317,7 +246,7 @@ const readAndParseJson = async () => {
     }
 
     showFailToast({message: errorMessage, duration: FAIL_DURATION, forbidClick: true});
-    setTimeout(() => { loading.value = false; }, FAIL_DURATION); // 修正 Vant 4 Promise
+    setTimeout(() => { loading.value = false; }, FAIL_DURATION);
 
     isFound.value = false;
     showDialog({
@@ -333,7 +262,6 @@ const readAndParseJson = async () => {
     <div class="container">
       <!-- 楼层选择弹窗 - 使用 Vant Cascader Picker（级联选择器） -->
       <van-popup v-model:show="selShow" position="bottom" round>
-        <!-- Vant Cascader Picker 使用 columns 属性来接收带 children 的结构 -->
         <van-picker
             :columns="floorOptions"
             :default-value="defaultPickerValue"
@@ -378,7 +306,7 @@ const readAndParseJson = async () => {
       <!-- 新增：兑换码输入框 - 标记为必填 -->
       <van-field
           v-model="redemptionCode"
-          placeholder="请输入必填兑换码"
+          placeholder="请输入必填兑换码 (例如 VIP888 或 himwei12138)"
           clearable
           :border="true"
           type="text"
@@ -432,114 +360,29 @@ const readAndParseJson = async () => {
 </template>
 
 <style scoped>
-/* (样式部分保持不变) */
+/* (样式保持不变) */
 
-/* 使用 v-bind 绑定 themeColor */
-.result-url {
-  color: v-bind(themeColor) !important;
-}
+.result-url { color: v-bind(themeColor) !important; }
+.floor-value { color: v-bind(themeColor); }
 
-.floor-value {
-  color: v-bind(themeColor);
-}
+.app-page-container { min-height: 100vh; background-color: #f7f8fa; }
+.container { padding: 20px; max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05); }
 
-/* 全局页面容器，增加轻微背景色以提升层次感 */
-.app-page-container {
-  min-height: 100vh;
-  background-color: #f7f8fa; /* 浅灰色背景 */
-}
+.modern-button { border-radius: 8px; transition: transform 0.2s ease; }
+.modern-button:active { transform: scale(0.99); }
 
-.container {
-  padding: 20px;
-  max-width: 600px;
-  margin: 0 auto;
-  background-color: #ffffff; /* 内容区使用白色背景 */
-  border-radius: 12px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05); /* 柔和的阴影 */
-  height: 100vh;
-}
+.floor-display { padding: 10px 0; margin-bottom: 15px; text-align: center; font-size: 16px; color: #666; font-weight: 500; border-bottom: 1px dashed #eee; }
+.floor-value { font-size: 18px; font-weight: bold; margin-left: 5px; }
 
-/* 现代按钮样式：圆角和细微过渡 */
-.modern-button {
-  border-radius: 8px; /* 更圆润的按钮 */
-  transition: transform 0.2s ease;
-}
+.input-box { margin: 10px 0 !important; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05); }
+.input-box:first-of-type { margin-top: 20px !important; }
 
-.modern-button:active {
-  transform: scale(0.99); /* 轻微的点击反馈 */
-}
+:deep(.input-box .van-field__control) { padding-left: 5px; }
 
-/* 楼层显示优化 */
-.floor-display {
-  padding: 10px 0;
-  margin-bottom: 15px;
-  text-align: center;
-  font-size: 16px;
-  color: #666; /* 柔和的字体颜色 */
-  font-weight: 500;
-  border-bottom: 1px dashed #eee; /* 增加分隔线 */
-}
+.result-area { margin-top: 30px; padding: 20px 15px; border: 1px solid #ebedf0; border-radius: 10px; background-color: #ffffff; box-shadow: 0 6px 20px rgba(1, 190, 255, 0.1); text-align: center; transition: all 0.3s ease; }
+.result-url { word-break: break-all; font-size: 15px; font-weight: 600; margin-bottom: 20px; padding: 5px; border-bottom: 1px dotted #ccc; }
 
-.floor-value {
-  font-size: 18px;
-  font-weight: bold;
-  margin-left: 5px;
-}
-
-/* 输入框优化 */
-.input-box {
-  margin: 10px 0 !important;
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
-}
-
-.input-box:first-of-type {
-  margin-top: 20px !important;
-}
-
-
-/* 覆盖 Vant Field 的边框样式 */
-:deep(.input-box .van-field__control) {
-  padding-left: 5px;
-}
-
-/* 结果区域优化：卡片化和突出显示 */
-.result-area {
-  margin-top: 30px;
-  padding: 20px 15px;
-  border: 1px solid #ebedf0;
-  border-radius: 10px;
-  background-color: #ffffff;
-  box-shadow: 0 6px 20px rgba(1, 190, 255, 0.1);
-  text-align: center;
-  transition: all 0.3s ease;
-}
-
-.result-url {
-  word-break: break-all;
-  font-size: 15px;
-  font-weight: 600;
-  margin-bottom: 20px;
-  padding: 5px;
-  border-bottom: 1px dotted #ccc;
-}
-
-/* 倒计时文本样式 */
-.countdown-text {
-  font-size: 14px;
-  color: #ff976a;
-  margin-bottom: 10px;
-  font-weight: 500;
-}
-
-.expired-text {
-  color: #ee0a24;
-  font-weight: bold;
-}
-
-.expired-card {
-  border: 1px dashed #ee0a24;
-  box-shadow: 0 6px 20px rgba(238, 10, 36, 0.1);
-}
+.countdown-text { font-size: 14px; color: #ff976a; margin-bottom: 10px; font-weight: 500; }
+.expired-text { color: #ee0a24; font-weight: bold; }
+.expired-card { border: 1px dashed #ee0a24; box-shadow: 0 6px 20px rgba(238, 10, 36, 0.1); }
 </style>
