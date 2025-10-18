@@ -185,14 +185,16 @@ const readAndParseJson = async () => {
   isExpired.value = false;
   if (timer.value) clearInterval(timer.value);
 
-  // === 兑换码必填校验 (略) ===
+  // === 兑换码必填校验 ===
   const FAIL_DURATION = 3000;
   if (!redemptionCode.value.trim()) {
     showFailToast({message: '请输入兑换码！', forbidClick: true, duration: 2000});
     loading.value = false;
     return;
   }
-  // ... (座位号校验等略) ...
+  // ===================================
+
+  // 1. 格式化座位号
   let numStr = String(inputNumber.value).trim();
   if (!numStr) {
     showFailToast({message: '请输入座位号', forbidClick: true, duration: 2000});
@@ -202,7 +204,13 @@ const readAndParseJson = async () => {
   while (numStr.length < 3) numStr = '0' + numStr;
   const formattedNumber = numStr;
 
-  // ... (加载 JSON 数据逻辑略) ...
+  // 2. 加载 JSON 数据
+  // 【关键修正：确保 loadToast 定义完整】
+  const loadToast = showLoadingToast({
+    message: '正在加载座位数据...',
+    forbidClick: true,
+    duration: 0,
+  });
 
   localData.value = await fetchJsonFromCdn(selValue.value);
   loadToast.close();
@@ -211,17 +219,22 @@ const readAndParseJson = async () => {
     return;
   }
 
-  // ... (构建 searchStr 和查找 foundItem 逻辑略) ...
-
-  const prefixMap = { '2楼北区': '2F-N', '2楼环廊': '2F-C', '3楼东门': '3F-E', '3楼南门': '3F-S', };
+  // 3. 构建搜索字符串 (前缀映射)
+  const prefixMap = {
+    '2楼北区': '2F-N',
+    '2楼环廊': '2F-C',
+    '3楼东门': '3F-E',
+    '3楼南门': '3F-S',
+  };
   const prefix = prefixMap[selValue.value] || '';
   if (!prefix) {
     showFailToast({message: '未知楼层前缀或未映射', forbidClick: true, duration: 2000});
     loading.value = false;
     return;
   }
-  const searchStr = prefix + formattedNumber;
+  const searchStr = prefix + formattedNumber; // 确保 searchStr 定义在 Loading Toast 之前
 
+  // 4. 查找座位
   let foundItem = null;
   localData.value.forEach(item => {
     if (item.devName === searchStr) {
@@ -235,7 +248,8 @@ const readAndParseJson = async () => {
     return;
   }
 
-  // 5. 【关键修改：移除长链接 longUrl 的生成】
+  // 5. 生成长链接（Worker 内部完成，前端只需要参数）
+  const longUrl = `https://oneseat.zjhzu.edu.cn/scancode.html#/login?sta=1&sysid=1BC&lab=${foundItem.labId}&dev=${foundItem.devSn}`; // 仅作为 Dialog 备用，不用于 API 调用
 
   // 6. 调用 Worker API 生成短链接
   const shortLinkToast = showLoadingToast({
@@ -252,9 +266,9 @@ const readAndParseJson = async () => {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        // 【关键修改：发送原始参数而不是完整的 longUrl】
-        labId: foundItem.labId,
-        devSn: foundItem.devSn,
+        // 【关键修改：使用新的参数名 p_a, p_b】
+        p_a: foundItem.labId,  // 例如，p_a 对应 labId
+        p_b: foundItem.devSn,  // 例如，p_b 对应 devSn
         redemptionCode: redemptionCode.value
       }),
     });
@@ -262,31 +276,35 @@ const readAndParseJson = async () => {
     const resData = await response.json();
 
     // --- 【核心错误处理逻辑】---
+
+    // 1. 业务错误响应 (HTTP 4xx/5xx 且带有 { error: ... } )
     if (!response.ok && resData && resData.error) {
       shortLinkToast.close();
       const failToast = showFailToast({message: resData.error, duration: 3000, forbidClick: true});
-      failToast.then(() => { loading.value = false; });
+      setTimeout(() => { loading.value = false; }, FAIL_DURATION); // 修正 Vant 4 Promise
       return;
     }
 
+    // 2. 成功响应 (HTTP 200-299 且包含 shortLink)
     if (response.ok && resData.shortLink) {
       shortLinkToast.close();
       resultUrl.value = resData.shortLink;
       isFound.value = true;
-      const successToast = showSuccessToast({message: `找到${searchStr}`, duration: 1000, forbidClick: true});
-      successToast.then(() => { loading.value = false; });
+      const SUCCESS_DURATION = 1000;
+      showSuccessToast({message: `找到${searchStr}`, duration: SUCCESS_DURATION, forbidClick: true});
+      setTimeout(() => { loading.value = false; }, SUCCESS_DURATION); // 修正 Vant 4 Promise
       startCountdown(resData.expiresAt);
       return;
     }
 
-    // 兜底错误
+    // 3. 兜底错误 (非预期响应)
     shortLinkToast.close();
     console.error('短链接 API 错误:', resData);
-    isFound.value = false; // 失败时不显示结果区域
+    isFound.value = false;
     showDialog({
       title: '短链接生成失败',
       message: `服务器响应代码 ${response.status} 但响应格式异常或缺少必要字段。`,
-    }).then(() => { loading.value = false; });
+    }).then(() => { loading.value = false; }); // Dialog 仍然是 Promise
 
   } catch (err) {
     // --- 【网络或 JSON 解析错误处理逻辑】---
@@ -298,10 +316,10 @@ const readAndParseJson = async () => {
       errorMessage = '服务器响应格式错误，请联系管理员';
     }
 
-    const failToast = showFailToast({message: errorMessage, duration: 3000, forbidClick: true});
-    failToast.then(() => { loading.value = false; });
+    showFailToast({message: errorMessage, duration: FAIL_DURATION, forbidClick: true});
+    setTimeout(() => { loading.value = false; }, FAIL_DURATION); // 修正 Vant 4 Promise
 
-    isFound.value = false; // 失败时不显示结果区域
+    isFound.value = false;
     showDialog({
       title: '短链接请求失败',
       message: '请检查网络或稍后重试。',
