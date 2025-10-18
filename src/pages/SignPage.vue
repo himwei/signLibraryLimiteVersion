@@ -186,14 +186,15 @@ const readAndParseJson = async () => {
   if (timer.value) clearInterval(timer.value);
 
   // === 兑换码必填校验 ===
+  const FAIL_DURATION = 3000; // 统一设置失败提示持续时间
+
   if (!redemptionCode.value.trim()) {
     showFailToast({message: '请输入兑换码！', forbidClick: true, duration: 2000});
     loading.value = false;
     return;
   }
-  // ===================================
+  // ... (其他校验和 Loading Toast 保持不变) ...
 
-  // 1. 格式化座位号
   let numStr = String(inputNumber.value).trim();
   if (!numStr) {
     showFailToast({message: '请输入座位号', forbidClick: true, duration: 2000});
@@ -203,7 +204,6 @@ const readAndParseJson = async () => {
   while (numStr.length < 3) numStr = '0' + numStr;
   const formattedNumber = numStr;
 
-  // 2. 加载 JSON 数据
   const loadToast = showLoadingToast({
     message: '正在加载座位数据...',
     forbidClick: true,
@@ -217,7 +217,6 @@ const readAndParseJson = async () => {
     return;
   }
 
-  // 3. 构建搜索字符串 (前缀映射)
   const prefixMap = {
     '2楼北区': '2F-N',
     '2楼环廊': '2F-C',
@@ -230,9 +229,8 @@ const readAndParseJson = async () => {
     loading.value = false;
     return;
   }
-  const searchStr = prefix + formattedNumber; // 👈 searchStr 定义在这里
+  const searchStr = prefix + formattedNumber;
 
-  // 4. 查找座位
   let foundItem = null;
   localData.value.forEach(item => {
     if (item.devName === searchStr) {
@@ -246,13 +244,10 @@ const readAndParseJson = async () => {
     return;
   }
 
-  // 5. 生成长链接
   const longUrl = `https://oneseat.zjhzu.edu.cn/scancode.html#/login?sta=1&sysid=1BC&lab=${foundItem.labId}&dev=${foundItem.devSn}`;
 
-  // 6. 调用 Worker API 生成短链接
-  // 确保 searchStr 在这里可用
   const shortLinkToast = showLoadingToast({
-    message: `正在找 ${searchStr}...`, // searchStr 现在已定义
+    message: `正在找 ${searchStr}...`,
     forbidClick: true,
     duration: 0,
   });
@@ -270,7 +265,6 @@ const readAndParseJson = async () => {
       }),
     });
 
-    // 无论状态码如何，都先尝试解析 JSON
     const resData = await response.json();
 
     // --- 【核心错误处理逻辑】---
@@ -278,8 +272,18 @@ const readAndParseJson = async () => {
     // 1. 业务错误响应 (HTTP 4xx/5xx 且带有 { error: ... } )
     if (!response.ok && resData && resData.error) {
       shortLinkToast.close();
-      const failToast = showFailToast({message: resData.error, duration: 3000, forbidClick: true});
-      failToast.then(() => { loading.value = false; });
+
+      // ❌ 移除 .then()，使用 on-close 钩子或 setTimeout
+      showFailToast({
+        message: resData.error,
+        duration: FAIL_DURATION,
+        forbidClick: true,
+        // 方式一：使用 on-close 钩子（如果 Vant 4 Toast 支持）
+        // onClosed: () => { loading.value = false; }
+      });
+
+      // 方式二：使用 setTimeout 模拟持续时间后解除 loading
+      setTimeout(() => { loading.value = false; }, FAIL_DURATION);
       return;
     }
 
@@ -288,8 +292,17 @@ const readAndParseJson = async () => {
       shortLinkToast.close();
       resultUrl.value = resData.shortLink;
       isFound.value = true;
-      const successToast = showSuccessToast({message: `找到${searchStr}`, duration: 1000, forbidClick: true});
-      successToast.then(() => { loading.value = false; });
+
+      const SUCCESS_DURATION = 1000;
+      showSuccessToast({
+        message: `找到${searchStr}`,
+        duration: SUCCESS_DURATION,
+        forbidClick: true
+      });
+
+      // 使用 setTimeout 模拟持续时间后解除 loading
+      setTimeout(() => { loading.value = false; }, SUCCESS_DURATION);
+
       startCountdown(resData.expiresAt);
       return;
     }
@@ -302,7 +315,7 @@ const readAndParseJson = async () => {
     showDialog({
       title: '短链接生成失败',
       message: `服务器响应代码 ${response.status} 但响应格式异常或缺少必要字段。`,
-    }).then(() => { loading.value = false; });
+    }).then(() => { loading.value = false; }); // Dialog 仍然返回 Promise，可以使用 .then
 
   } catch (err) {
     // --- 【网络或 JSON 解析错误处理逻辑】---
@@ -314,8 +327,14 @@ const readAndParseJson = async () => {
       errorMessage = '服务器响应格式错误，请联系管理员';
     }
 
-    const failToast = showFailToast({message: errorMessage, duration: 3000, forbidClick: true});
-    failToast.then(() => { loading.value = false; });
+    // ❌ 移除 .then()，使用 setTimeout
+    showFailToast({
+      message: errorMessage,
+      duration: FAIL_DURATION,
+      forbidClick: true
+    });
+
+    setTimeout(() => { loading.value = false; }, FAIL_DURATION);
 
     resultUrl.value = longUrl;
     isFound.value = true;
