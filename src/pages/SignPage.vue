@@ -40,13 +40,54 @@ const floorOptions = [
         text: '环廊',
         value: '2楼环廊',
       },
+      {
+        text: '北区',
+        value: '2楼北区',
+      },
     ],
   },
   {
     text: '3楼',
     value: '3楼',
     children: [
-
+      {
+        text: '北区',
+        value: '3楼北区',
+      },
+      {
+        text: '南区',
+        value: '3楼南区',
+      },
+      {
+        text: '东区',
+        value: '3楼东区',
+      },
+      {
+        text: '西区',
+        value: '3楼西区',
+      },
+    ],
+  },
+  {
+    text: '4楼',
+    value: '4楼',
+    children: [
+      {
+        text: '北区',
+        value: '4楼北区',
+      },
+      {
+        text: '南区',
+        value: '4楼南区',
+      },
+      {
+        text: '东区',
+        value: '4楼东区',
+      },
+      {
+        text: '西区',
+        value: '4楼西区',
+      },
     ],
   },
 ];
