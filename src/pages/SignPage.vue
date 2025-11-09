@@ -41,8 +41,8 @@ const floorOptions = [
         value: '2楼环廊',
       },
       {
-        text: '北区',
-        value: '2楼北区',
+        text: '西区',
+        value: '2楼西区',
       },
     ],
   },
